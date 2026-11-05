@@ -24,6 +24,40 @@ pyautogui.FAILSAFE = False
 pydirectinput.PAUSE = 0.0
 pydirectinput.FAILSAFE = False
 
+# Try importing ctypes for Windows active window detection
+try:
+    import ctypes
+    HAS_CTYPES = True
+    user32 = ctypes.windll.user32
+except Exception:
+    HAS_CTYPES = False
+
+
+def get_foreground_window_title() -> str:
+    """Retrieves title of currently focused Windows application."""
+    if not HAS_CTYPES:
+        return ""
+    try:
+        hwnd = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return ""
+        buff = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buff, length + 1)
+        return buff.value
+    except Exception:
+        return ""
+
+
+def is_game_or_browser_focused() -> bool:
+    """
+    Checks if Subway Surfers or a web browser is currently the active foreground window.
+    Detects Chrome, Edge, Firefox, Brave, Opera, and Poki Subway Surfers.
+    """
+    title = get_foreground_window_title().lower()
+    keywords = ["subway surfers", "poki", "chrome", "edge", "firefox", "brave", "opera", "browser"]
+    return any(k in title for k in keywords)
+
 
 class KeyboardController:
     """Dispatches asynchronous keyboard inputs for game actions."""
@@ -82,9 +116,24 @@ class KeyboardController:
         self._worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self._worker_thread.start()
 
+    def release_all_keys(self):
+        """Emergency key-up for all game control keys to prevent stuck inputs."""
+        all_keys = ["up", "down", "left", "right", "w", "s", "a", "d"]
+        for k in all_keys:
+            try:
+                pydirectinput.keyUp(k)
+            except Exception:
+                pass
+            try:
+                pyautogui.keyUp(k)
+            except Exception:
+                pass
+
     def set_active(self, active: bool):
         """Enables or disables sending keystrokes."""
         self.is_active = active
+        if not active:
+            self.release_all_keys()
 
     def set_key_preset(self, preset: str):
         """Switch between ARROWS and WASD."""
@@ -171,6 +220,8 @@ class KeyboardController:
             self.stats[k] = 0
 
     def shutdown(self):
-        """Stops the worker thread."""
+        """Stops the worker thread and releases all keys."""
         self._running = False
         self.is_active = False
+        self.release_all_keys()
+

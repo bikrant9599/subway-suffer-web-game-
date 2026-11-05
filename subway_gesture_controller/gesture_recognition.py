@@ -19,6 +19,7 @@ from subway_gesture_controller.hand_detection import HandData
 
 class GestureType:
     NONE = "WAITING"
+    NEUTRAL = "NEUTRAL"
     JUMP = "JUMP"
     ROLL = "ROLL"
     MOVE_LEFT = "MOVE_LEFT"
@@ -234,7 +235,8 @@ class GestureRecognizer:
             if is_angle_left or is_dx_left or is_bend_left:
                 return GestureType.MOVE_LEFT, finger_states, screen_angle
 
-        return GestureType.NONE, finger_states, screen_angle
+        # Hand detected in resting / neutral state
+        return GestureType.NEUTRAL, finger_states, screen_angle
 
     def process(self, hand_data: Optional[HandData]) -> GestureDetails:
         """
@@ -272,26 +274,32 @@ class GestureRecognizer:
 
         # 2. Temporal consensus smoothing (filtering transient noise)
         confirmed = self.confirmed_gesture
+        active_gestures = [GestureType.JUMP, GestureType.ROLL, GestureType.MOVE_LEFT, GestureType.MOVE_RIGHT]
+
         if len(self.gesture_history) >= 1:
             counts: Dict[str, int] = {}
             for g in self.gesture_history:
                 counts[g] = counts.get(g, 0) + 1
 
             for g, cnt in counts.items():
-                if g != GestureType.NONE and cnt >= self.min_trigger_consensus:
+                if g in active_gestures and cnt >= self.min_trigger_consensus:
                     confirmed = g
                     break
             else:
-                if counts.get(GestureType.NONE, 0) >= (self.smoothing_frames // 2 + 1):
+                if counts.get(GestureType.NEUTRAL, 0) >= (self.smoothing_frames // 2):
+                    confirmed = GestureType.NEUTRAL
+                elif counts.get(GestureType.NONE, 0) >= (self.smoothing_frames // 2):
                     confirmed = GestureType.NONE
+                else:
+                    confirmed = raw_gesture
 
         self.confirmed_gesture = confirmed
 
         # 3. Edge-Trigger State Machine:
-        # Trigger an action ONLY when newly entering a gesture or transitioning from another!
+        # Trigger an action ONLY when newly entering an active gesture or transitioning!
         action_to_trigger: Optional[str] = None
 
-        if confirmed != GestureType.NONE:
+        if confirmed in active_gestures and raw_gesture in active_gestures:
             # Check if this is a newly detected gesture transition
             if confirmed != self.currently_held_gesture:
                 # Check cooldown
@@ -305,7 +313,7 @@ class GestureRecognizer:
                 # Still holding the same gesture -> DO NOT TRIGGER AGAIN!
                 action_to_trigger = None
         else:
-            # User relaxed hand / returned to neutral
+            # User relaxed hand / returned to neutral position
             self.currently_held_gesture = GestureType.NONE
             action_to_trigger = None
 

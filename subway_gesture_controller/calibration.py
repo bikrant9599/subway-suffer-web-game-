@@ -268,3 +268,4 @@ class HandCalibrator:
             except Exception as e:
                 print(f"[HandCalibrator] Error loading calibration file: {e}")
         return self.get_default_calibration()
+

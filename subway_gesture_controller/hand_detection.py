@@ -321,3 +321,4 @@ class HandDetector:
         """Releases MediaPipe resources."""
         if hasattr(self, 'detector'):
             self.detector.close()
+

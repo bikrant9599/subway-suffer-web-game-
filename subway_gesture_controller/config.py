@@ -115,3 +115,4 @@ class ControllerSettings:
 
 # Global default settings instance
 settings = ControllerSettings.load_from_file()
+

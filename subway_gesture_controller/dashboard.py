@@ -26,7 +26,7 @@ except ImportError:
 from subway_gesture_controller.config import THEME, GAME_URL, settings, CALIBRATION_FILE
 from subway_gesture_controller.hand_detection import HandDetector, HandData
 from subway_gesture_controller.gesture_recognition import GestureRecognizer, GestureType, GestureDetails
-from subway_gesture_controller.keyboard_controller import KeyboardController
+from subway_gesture_controller.keyboard_controller import KeyboardController, is_game_or_browser_focused
 from subway_gesture_controller.calibration import HandCalibrator, CalibrationStep, STEP_DESCRIPTIONS
 
 # Set CustomTkinter theme
@@ -199,7 +199,7 @@ class ControllerDashboard(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _build_header(self):
-        """Top Header Bar with Title, Emergency Stop Badge, and Game Launcher."""
+        """Top Header Bar with Logo, Title, Emergency Stop Badge, and Game Launcher."""
         header_frame = ctk.CTkFrame(
             self,
             fg_color=THEME["bg_secondary"],
@@ -211,22 +211,38 @@ class ControllerDashboard(ctk.CTk):
         header_frame.pack(fill="x", side="top", pady=(0, 8))
         header_frame.pack_propagate(False)
 
-        # Title Container
+        # Title Container with Logo
         title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_box.pack(side="left", padx=24, pady=8)
+        title_box.pack(side="left", padx=20, pady=6)
+
+        # Logo Icon
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "logo.png")
+        if os.path.exists(logo_path):
+            try:
+                logo_pil = Image.open(logo_path).resize((44, 44), Image.Resampling.LANCZOS)
+                self.logo_ctk = ctk.CTkImage(light_image=logo_pil, dark_image=logo_pil, size=(44, 44))
+                logo_lbl = ctk.CTkLabel(title_box, image=self.logo_ctk, text="")
+                logo_lbl.pack(side="left", padx=(0, 12))
+            except Exception as e:
+                print(f"[Dashboard] Logo load error: {e}")
+
+        text_sub_box = ctk.CTkFrame(title_box, fg_color="transparent")
+        text_sub_box.pack(side="left")
 
         app_title = ctk.CTkLabel(
-            title_box,
+            text_sub_box,
             text="⚡ AI HAND GESTURE GAMING CONTROLLER",
-            font=ctk.CTkFont(size=20, weight="bold"),
+            font=ctk.CTkFont(size=18, weight="bold"),
             text_color=THEME["accent_cyan"]
         )
         app_title.pack(anchor="w")
 
         app_subtitle = ctk.CTkLabel(
-            title_box,
+            text_sub_box,
             text="Subway Surfers Real-Time Motion Control | MediaPipe 3D Landmark Vision",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=THEME["text_secondary"]
         )
         app_subtitle.pack(anchor="w")
@@ -432,25 +448,40 @@ class ControllerDashboard(ctk.CTk):
         stat_grid.pack(fill="x", padx=20, pady=(0, 14))
         stat_grid.grid_columnconfigure(1, weight=1)
 
-        # Controller Active Status
-        ctk.CTkLabel(stat_grid, text="Controller Status:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=0, column=0, sticky="w", pady=2)
-        self.stat_ctrl = ctk.CTkLabel(stat_grid, text="PAUSED", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["accent_orange"])
-        self.stat_ctrl.grid(row=0, column=1, sticky="e", pady=2)
+        # 1. Camera Connected Status
+        ctk.CTkLabel(stat_grid, text="Camera Connected:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=0, column=0, sticky="w", pady=2)
+        self.stat_cam = ctk.CTkLabel(stat_grid, text="INITIALIZING...", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["accent_cyan"])
+        self.stat_cam.grid(row=0, column=1, sticky="e", pady=2)
 
-        # Hand Detection Status
-        ctk.CTkLabel(stat_grid, text="Hand Detection:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=1, column=0, sticky="w", pady=2)
+        # 2. Hand Detected Status
+        ctk.CTkLabel(stat_grid, text="Hand Detected:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=1, column=0, sticky="w", pady=2)
         self.stat_hand = ctk.CTkLabel(stat_grid, text="Searching...", font=ctk.CTkFont(size=12), text_color=THEME["text_muted"])
         self.stat_hand.grid(row=1, column=1, sticky="e", pady=2)
 
-        # Active Key Mapping
-        ctk.CTkLabel(stat_grid, text="Key Preset:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=2, column=0, sticky="w", pady=2)
-        self.stat_preset = ctk.CTkLabel(stat_grid, text="ARROWS (↑ ↓ ← →)", font=ctk.CTkFont(size=12), text_color=THEME["accent_blue"])
-        self.stat_preset.grid(row=2, column=1, sticky="e", pady=2)
+        # 3. Gesture Recognized Status
+        ctk.CTkLabel(stat_grid, text="Gesture Recognized:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=2, column=0, sticky="w", pady=2)
+        self.stat_gest = ctk.CTkLabel(stat_grid, text="WAITING", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["text_secondary"])
+        self.stat_gest.grid(row=2, column=1, sticky="e", pady=2)
 
-        # Last Triggered Action
-        ctk.CTkLabel(stat_grid, text="Last Action Sent:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=3, column=0, sticky="w", pady=2)
+        # 4. Game Control Active Status
+        ctk.CTkLabel(stat_grid, text="Game Control Active:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=3, column=0, sticky="w", pady=2)
+        self.stat_ctrl = ctk.CTkLabel(stat_grid, text="PAUSED", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["accent_orange"])
+        self.stat_ctrl.grid(row=3, column=1, sticky="e", pady=2)
+
+        # 5. Browser / Game Focus Status
+        ctk.CTkLabel(stat_grid, text="Game Window Focus:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=4, column=0, sticky="w", pady=2)
+        self.stat_focus = ctk.CTkLabel(stat_grid, text="CHECKING...", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME["accent_orange"])
+        self.stat_focus.grid(row=4, column=1, sticky="e", pady=2)
+
+        # 6. Last Action Sent
+        ctk.CTkLabel(stat_grid, text="Last Action Sent:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=5, column=0, sticky="w", pady=2)
         self.stat_action = ctk.CTkLabel(stat_grid, text="None", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["text_primary"])
-        self.stat_action.grid(row=3, column=1, sticky="e", pady=2)
+        self.stat_action.grid(row=5, column=1, sticky="e", pady=2)
+
+        # 7. Total Gestures Detected
+        ctk.CTkLabel(stat_grid, text="Total Gestures Detected:", font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]).grid(row=6, column=0, sticky="w", pady=2)
+        self.stat_total = ctk.CTkLabel(stat_grid, text="0", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["accent_blue"])
+        self.stat_total.grid(row=6, column=1, sticky="e", pady=2)
 
         # 3. CONTROL BUTTONS CARD
         btn_card = ctk.CTkFrame(
@@ -474,21 +505,47 @@ class ControllerDashboard(ctk.CTk):
         btn_grid.pack(fill="x", padx=20, pady=(0, 14))
         btn_grid.grid_columnconfigure((0, 1), weight=1)
 
-        # Master Control Toggle Button
-        self.control_btn = ctk.CTkButton(
+        # START GAME CONTROL button
+        self.start_ctrl_btn = ctk.CTkButton(
             btn_grid,
             text="🎮 START GAME CONTROL",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color=THEME["accent_green"],
             hover_color="#059669",
-            height=38,
+            height=36,
             corner_radius=8,
-            command=self.toggle_game_control
+            command=self.start_game_control
         )
-        self.control_btn.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.start_ctrl_btn.grid(row=0, column=0, padx=(0, 4), sticky="ew", pady=(0, 6))
 
-        # Start Camera Button
-        self.cam_toggle_btn = ctk.CTkButton(
+        # PAUSE CONTROL button
+        self.pause_ctrl_btn = ctk.CTkButton(
+            btn_grid,
+            text="⏸️ PAUSE CONTROL",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["accent_orange"],
+            hover_color="#d97706",
+            height=36,
+            corner_radius=8,
+            command=self.pause_game_control
+        )
+        self.pause_ctrl_btn.grid(row=0, column=1, padx=(4, 0), sticky="ew", pady=(0, 6))
+
+        # START CAMERA button
+        self.start_cam_btn = ctk.CTkButton(
+            btn_grid,
+            text="📹 START CAMERA",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["card_border"],
+            hover_color="#334155",
+            height=34,
+            corner_radius=8,
+            command=self.start_camera
+        )
+        self.start_cam_btn.grid(row=1, column=0, padx=(0, 4), sticky="ew", pady=3)
+
+        # STOP CAMERA button
+        self.stop_cam_btn = ctk.CTkButton(
             btn_grid,
             text="⏹️ STOP CAMERA",
             font=ctk.CTkFont(size=12, weight="bold"),
@@ -496,11 +553,11 @@ class ControllerDashboard(ctk.CTk):
             hover_color="#334155",
             height=34,
             corner_radius=8,
-            command=self.toggle_camera
+            command=self.stop_camera
         )
-        self.cam_toggle_btn.grid(row=1, column=0, padx=(0, 4), sticky="ew", pady=4)
+        self.stop_cam_btn.grid(row=1, column=1, padx=(4, 0), sticky="ew", pady=3)
 
-        # Calibrate Button
+        # CALIBRATE HAND button
         self.calib_btn = ctk.CTkButton(
             btn_grid,
             text="🎯 CALIBRATE HAND",
@@ -511,13 +568,26 @@ class ControllerDashboard(ctk.CTk):
             corner_radius=8,
             command=self.open_calibration_dialog
         )
-        self.calib_btn.grid(row=1, column=1, padx=(4, 0), sticky="ew", pady=4)
+        self.calib_btn.grid(row=2, column=0, padx=(0, 4), sticky="ew", pady=3)
 
-        # Exit Button
+        # OPEN SUBWAY SURFERS button
+        self.open_game_btn = ctk.CTkButton(
+            btn_grid,
+            text="🌐 OPEN SUBWAY SURFERS",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0891b2",
+            hover_color="#0e7490",
+            height=34,
+            corner_radius=8,
+            command=self.open_game_in_browser
+        )
+        self.open_game_btn.grid(row=2, column=1, padx=(4, 0), sticky="ew", pady=3)
+
+        # EXIT APPLICATION button
         exit_btn = ctk.CTkButton(
             btn_grid,
             text="❌ EXIT APPLICATION",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#3b1219",
             hover_color="#5a1824",
             text_color=THEME["accent_red"],
@@ -525,7 +595,7 @@ class ControllerDashboard(ctk.CTk):
             corner_radius=8,
             command=self.on_close
         )
-        exit_btn.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        exit_btn.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         # 4. TUNING SETTINGS CARD
         settings_card = ctk.CTkFrame(
@@ -615,37 +685,30 @@ class ControllerDashboard(ctk.CTk):
     # ACTION & CONTROL HANDLERS
     # ==========================
 
+    def start_game_control(self):
+        """Enables keyboard controller commands."""
+        self.keyboard.set_active(True)
+        self.stat_ctrl.configure(text="ACTIVE (READY)", text_color=THEME["accent_green"])
+        print("[Dashboard] Game Control ACTIVATED!")
+
+    def pause_game_control(self):
+        """Pauses keyboard controller commands."""
+        self.keyboard.set_active(False)
+        self.stat_ctrl.configure(text="PAUSED", text_color=THEME["accent_orange"])
+        print("[Dashboard] Game Control PAUSED!")
+
     def toggle_game_control(self):
         """Toggles between ACTIVE and PAUSED keyboard controller states."""
-        new_state = not self.keyboard.is_active
-        self.keyboard.set_active(new_state)
-
-        if new_state:
-            self.control_btn.configure(
-                text="⏸️ PAUSE GAME CONTROL",
-                fg_color=THEME["accent_orange"],
-                hover_color="#d97706"
-            )
-            self.stat_ctrl.configure(text="ACTIVE (READY)", text_color=THEME["accent_green"])
+        if self.keyboard.is_active:
+            self.pause_game_control()
         else:
-            self.control_btn.configure(
-                text="🎮 START GAME CONTROL",
-                fg_color=THEME["accent_green"],
-                hover_color="#059669"
-            )
-            self.stat_ctrl.configure(text="PAUSED", text_color=THEME["accent_orange"])
+            self.start_game_control()
 
     def emergency_stop(self):
         """Immediately pauses the controller and protects game state."""
-        if self.keyboard.is_active:
-            self.keyboard.set_active(False)
-            self.control_btn.configure(
-                text="🎮 START GAME CONTROL",
-                fg_color=THEME["accent_green"],
-                hover_color="#059669"
-            )
-            self.stat_ctrl.configure(text="PAUSED (EMERGENCY)", text_color=THEME["accent_red"])
-            print("[Dashboard] EMERGENCY STOP TRIGGERED VIA ESC!")
+        self.pause_game_control()
+        self.stat_ctrl.configure(text="PAUSED (EMERGENCY)", text_color=THEME["accent_red"])
+        print("[Dashboard] EMERGENCY STOP TRIGGERED VIA ESC!")
 
     def _global_hotkey_listener(self):
         """Polls Windows GetAsyncKeyState for ESC hotkey across background and games."""
@@ -668,11 +731,8 @@ class ControllerDashboard(ctk.CTk):
     def toggle_camera(self):
         if self.camera_running:
             self.stop_camera()
-            self.cam_toggle_btn.configure(text="▶️ START CAMERA")
-            self.video_label.configure(text="CAMERA STOPPED")
         else:
             self.start_camera()
-            self.cam_toggle_btn.configure(text="⏹️ STOP CAMERA")
 
     def start_camera(self):
         if self.camera_running:
@@ -686,8 +746,12 @@ class ControllerDashboard(ctk.CTk):
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.frame_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.frame_height)
             self.camera_running = True
+            if hasattr(self, "stat_cam"):
+                self.stat_cam.configure(text="CONNECTED", text_color=THEME["accent_green"])
             self.after(20, self._camera_loop)
         else:
+            if hasattr(self, "stat_cam"):
+                self.stat_cam.configure(text="OFFLINE (NO WEBCAM)", text_color=THEME["accent_red"])
             self.video_label.configure(text="CAMERA UNAVAILABLE (CHECK WEBCAM)")
 
     def stop_camera(self):
@@ -695,6 +759,9 @@ class ControllerDashboard(ctk.CTk):
         if self.cap:
             self.cap.release()
             self.cap = None
+        if hasattr(self, "stat_cam"):
+            self.stat_cam.configure(text="STOPPED", text_color=THEME["accent_orange"])
+        self.video_label.configure(image="", text="CAMERA STOPPED")
 
     def _on_action_executed(self, action: str, key: str):
         """Called asynchronously when a keyboard keystroke is dispatched."""
@@ -905,9 +972,10 @@ class ControllerDashboard(ctk.CTk):
             self.hand_pos_lbl.configure(text="POS: (---, ---)")
             self.stat_hand.configure(text="SEARCHING...", text_color=THEME["accent_orange"])
 
-        # Hero Gesture Badge
+        # Hero Gesture Badge & Recognized Gesture
         gesture_map_labels = {
             GestureType.NONE: ("⏳ NO GESTURE – WAITING", THEME["text_secondary"]),
+            GestureType.NEUTRAL: ("✋ NEUTRAL – READY", THEME["text_secondary"]),
             GestureType.JUMP: ("🖐️ OPEN PALM – JUMP", THEME["accent_cyan"]),
             GestureType.ROLL: ("✊ CLOSED FIST – ROLL", THEME["accent_cyan"]),
             GestureType.MOVE_RIGHT: ("👉 INDEX RIGHT – MOVE RIGHT", THEME["accent_cyan"]),
@@ -915,6 +983,19 @@ class ControllerDashboard(ctk.CTk):
         }
         badge_text, badge_color = gesture_map_labels.get(details.confirmed_gesture, ("WAITING", THEME["text_secondary"]))
         self.gesture_badge.configure(text=badge_text, text_color=badge_color)
+        if hasattr(self, "stat_gest"):
+            self.stat_gest.configure(text=details.confirmed_gesture)
+
+        # Check Active Window Focus (Subway Surfers Browser)
+        if hasattr(self, "stat_focus"):
+            if is_game_or_browser_focused():
+                self.stat_focus.configure(text="✅ FOCUSED (RECEIVING INPUT)", text_color=THEME["accent_green"])
+            else:
+                self.stat_focus.configure(text="⚠️ CLICK GAME TO FOCUS", text_color=THEME["accent_orange"])
+
+        # Update Total Gestures Counter
+        if hasattr(self, "stat_total"):
+            self.stat_total.configure(text=str(self.keyboard.stats["TOTAL"]))
 
         # Finger State Chips
         for finger, is_ext in details.finger_states.items():

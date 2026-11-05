@@ -10,3 +10,4 @@ Modular core package for the AI Hand Gesture Gaming Controller.
 - `calibration.py`: Interactive 4-step hand calibration wizard
 - `dashboard.py`: CustomTkinter dark cyberpunk GUI
 - `config.py`: Persistent configuration and theme settings
+

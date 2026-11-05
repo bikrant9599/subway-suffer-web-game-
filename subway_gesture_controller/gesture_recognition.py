@@ -91,6 +91,12 @@ class GestureRecognizer:
         self.cooldowns[GestureType.JUMP] = jump
         self.cooldowns[GestureType.ROLL] = roll
 
+    def update_performance_mode(self, smoothing_frames: int, min_trigger_consensus: int):
+        """Updates temporal consensus window for instant response."""
+        self.smoothing_frames = max(1, smoothing_frames)
+        self.min_trigger_consensus = max(1, min_trigger_consensus)
+        self.gesture_history = deque(maxlen=self.smoothing_frames)
+
     def apply_calibration(self, calib_dict: dict):
         """Applies saved or freshly calibrated thresholds."""
         for k, v in calib_dict.items():

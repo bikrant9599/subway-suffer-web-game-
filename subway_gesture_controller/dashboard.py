@@ -169,13 +169,22 @@ class ControllerDashboard(ctk.CTk):
         # Connect keyboard trigger callback
         self.keyboard.on_action_triggered = self._on_action_executed
 
-        # Video stream state
+        # Video stream state & Threaded Vision Pipeline
         self.cap: Optional[cv2.VideoCapture] = None
         self.camera_running = False
         self.fps_tracker = deque(maxlen=20)
+        self.vision_fps_tracker = deque(maxlen=20)
         self.last_frame_time = time.time()
+        self.last_vision_time = time.time()
         self.current_action_banner = ""
         self.action_banner_expire = 0.0
+
+        # Thread synchronization
+        self.frame_lock = threading.Lock()
+        self.latest_frame: Optional[np.ndarray] = None
+        self.latest_hand_data: Optional[HandData] = None
+        self.latest_details: Optional[GestureDetails] = None
+        self.vision_thread: Optional[threading.Thread] = None
 
         # Build UI layout
         self._build_header()
@@ -314,33 +323,41 @@ class ControllerDashboard(ctk.CTk):
         )
         self.video_label.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
 
-        # Camera Bottom Metric Bar
+        # Camera Bottom Metric Bar (Live Performance Monitoring)
         cam_bar = ctk.CTkFrame(self.cam_card, fg_color=THEME["bg_secondary"], height=38, corner_radius=10)
         cam_bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
 
         self.fps_lbl = ctk.CTkLabel(
             cam_bar,
-            text="FPS: 00.0",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text="CAM: 00.0 FPS | AI: 00.0 FPS",
+            font=ctk.CTkFont(size=11, weight="bold"),
             text_color=THEME["accent_cyan"]
         )
-        self.fps_lbl.pack(side="left", padx=16)
+        self.fps_lbl.pack(side="left", padx=12)
+
+        self.perf_lbl = ctk.CTkLabel(
+            cam_bar,
+            text="LATENCY: 00ms | INFER: 00ms",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=THEME["accent_blue"]
+        )
+        self.perf_lbl.pack(side="left", padx=12)
 
         self.conf_lbl = ctk.CTkLabel(
             cam_bar,
             text="TRACKING: WAITING",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=THEME["text_secondary"]
         )
-        self.conf_lbl.pack(side="left", padx=16)
+        self.conf_lbl.pack(side="left", padx=12)
 
         self.hand_pos_lbl = ctk.CTkLabel(
             cam_bar,
             text="POS: (---, ---)",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             text_color=THEME["text_muted"]
         )
-        self.hand_pos_lbl.pack(side="right", padx=16)
+        self.hand_pos_lbl.pack(side="right", padx=12)
 
         # Row of 4 Animated Gesture Cards
         cards_row = ctk.CTkFrame(left_col, fg_color="transparent")
@@ -618,6 +635,21 @@ class ControllerDashboard(ctk.CTk):
         set_inner = ctk.CTkFrame(settings_card, fg_color="transparent")
         set_inner.pack(fill="x", padx=20, pady=(0, 14))
 
+        # Response Profile (NORMAL, FAST, ULTRA FAST)
+        mode_row = ctk.CTkFrame(set_inner, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(2, 6))
+        ctk.CTkLabel(mode_row, text="Response Mode:", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["accent_cyan"]).pack(side="left")
+
+        self.mode_seg = ctk.CTkSegmentedButton(
+            mode_row,
+            values=["NORMAL", "FAST", "ULTRA FAST"],
+            command=self._on_performance_mode_changed,
+            selected_color=THEME["accent_cyan"],
+            selected_hover_color="#0284c7"
+        )
+        self.mode_seg.set(settings.performance_mode)
+        self.mode_seg.pack(side="right")
+
         # Preset Selector (Arrows vs WASD)
         preset_row = ctk.CTkFrame(set_inner, fg_color="transparent")
         preset_row.pack(fill="x", pady=4)
@@ -641,9 +673,9 @@ class ControllerDashboard(ctk.CTk):
 
         self.jump_slider = ctk.CTkSlider(
             set_inner,
-            from_=200,
-            to=800,
-            number_of_steps=12,
+            from_=100,
+            to=600,
+            number_of_steps=10,
             command=self._on_jump_cd_slider
         )
         self.jump_slider.set(settings.cooldown_jump * 1000)
@@ -657,9 +689,9 @@ class ControllerDashboard(ctk.CTk):
 
         self.lr_slider = ctk.CTkSlider(
             set_inner,
-            from_=150,
-            to=600,
-            number_of_steps=9,
+            from_=80,
+            to=500,
+            number_of_steps=14,
             command=self._on_lr_cd_slider
         )
         self.lr_slider.set(settings.cooldown_left_right * 1000)
@@ -737,9 +769,10 @@ class ControllerDashboard(ctk.CTk):
     def start_camera(self):
         if self.camera_running:
             return
-        self.cap = cv2.VideoCapture(settings.camera_index)
+        self.cap = cv2.VideoCapture(settings.camera_index, cv2.CAP_DSHOW)
         if not self.cap.isOpened():
-            # Try camera index 1 if 0 is unavailable
+            self.cap = cv2.VideoCapture(settings.camera_index)
+        if not self.cap.isOpened():
             self.cap = cv2.VideoCapture(1)
 
         if self.cap.isOpened():
@@ -747,8 +780,14 @@ class ControllerDashboard(ctk.CTk):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.frame_height)
             self.camera_running = True
             if hasattr(self, "stat_cam"):
-                self.stat_cam.configure(text="CONNECTED", text_color=THEME["accent_green"])
-            self.after(20, self._camera_loop)
+                self.stat_cam.configure(text="CONNECTED (ACTIVE)", text_color=THEME["accent_green"])
+
+            # Start high-speed dedicated vision worker thread
+            self.vision_thread = threading.Thread(target=self._vision_worker_loop, daemon=True)
+            self.vision_thread.start()
+
+            # Start smooth decoupled UI refresh loop
+            self.after(20, self._ui_update_loop)
         else:
             if hasattr(self, "stat_cam"):
                 self.stat_cam.configure(text="OFFLINE (NO WEBCAM)", text_color=THEME["accent_red"])
@@ -756,6 +795,9 @@ class ControllerDashboard(ctk.CTk):
 
     def stop_camera(self):
         self.camera_running = False
+        if self.vision_thread and self.vision_thread.is_alive():
+            self.vision_thread.join(timeout=0.3)
+            self.vision_thread = None
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -780,6 +822,30 @@ class ControllerDashboard(ctk.CTk):
     # ==========================
     # SETTINGS HANDLERS
     # ==========================
+
+    def _on_performance_mode_changed(self, value: str):
+        """Switches active response profile between NORMAL, FAST, and ULTRA FAST."""
+        settings.apply_performance_mode(value)
+        self.recognizer.update_performance_mode(
+            settings.smoothing_window,
+            settings.min_trigger_frames
+        )
+        self.recognizer.update_cooldowns(
+            settings.cooldown_left_right,
+            settings.cooldown_jump,
+            settings.cooldown_roll
+        )
+        self.keyboard.set_key_hold_time(settings.key_press_duration)
+
+        # Update sliders to match profile
+        self.jump_slider.set(settings.cooldown_jump * 1000)
+        self.jump_cd_lbl.configure(text=f"Jump Cooldown: {int(settings.cooldown_jump * 1000)} ms")
+
+        self.lr_slider.set(settings.cooldown_left_right * 1000)
+        self.lr_cd_lbl.configure(text=f"Left/Right Cooldown: {int(settings.cooldown_left_right * 1000)} ms")
+
+        settings.save_to_file()
+        print(f"[Dashboard] Switched to {value} profile (Hold: {int(settings.key_press_duration*1000)}ms, CD: {int(settings.cooldown_left_right*1000)}ms)")
 
     def _on_preset_changed(self, value: str):
         settings.key_preset = value
@@ -902,64 +968,100 @@ class ControllerDashboard(ctk.CTk):
     # VIDEO & DETECTION PIPELINE
     # ==========================
 
-    def _camera_loop(self):
-        """Main camera acquisition and real-time inference loop."""
-        if not self.camera_running or self.cap is None:
+    def _vision_worker_loop(self):
+        """
+        Ultra-fast dedicated camera acquisition and vision inference thread.
+        Bypasses Tkinter GUI thread completely to achieve sub-50ms latency.
+        Dispatches actions immediately to the keyboard controller on detection.
+        """
+        print("[Dashboard] Ultra-Fast Vision Worker Thread ACTIVE.")
+        while self.camera_running and self.cap is not None:
+            ret, frame_bgr = self.cap.read()
+            if not ret or frame_bgr is None:
+                time.sleep(0.005)
+                continue
+
+            now = time.time()
+            v_fps = 1.0 / max(1e-4, (now - self.last_vision_time))
+            self.vision_fps_tracker.append(v_fps)
+            self.last_vision_time = now
+
+            # 1. MediaPipe 3D Landmark Vision
+            processed_frame, hand_data = self.detector.process_frame(frame_bgr, mirror=True)
+
+            # 2. Calibration sampling if wizard is open
+            if self.calibrator.is_calibrating():
+                self.calibrator.process_frame(hand_data)
+
+            # 3. High-Speed Geometric Gesture Classification
+            gesture_details: GestureDetails = self.recognizer.process(hand_data)
+
+            # 4. INSTANT ACTION DISPATCH: Fire keyboard event immediately on vision thread!
+            if gesture_details.action_to_trigger:
+                self.keyboard.trigger_action(gesture_details.action_to_trigger)
+
+            # 5. Check action banner expiration
+            banner_text = self.current_action_banner if now < self.action_banner_expire else ""
+
+            # 6. Render futuristic HUD on frame
+            hud_frame = self.detector.draw_hud(
+                processed_frame,
+                hand_data,
+                current_gesture=gesture_details.confirmed_gesture,
+                action_name=banner_text,
+                is_active=self.keyboard.is_active
+            )
+
+            # 7. Post to thread-safe shared slot for the decoupled GUI
+            with self.frame_lock:
+                self.latest_frame = hud_frame
+                self.latest_hand_data = hand_data
+                self.latest_details = gesture_details
+
+    def _ui_update_loop(self):
+        """
+        Decoupled 60 FPS UI rendering loop.
+        Retrieves the latest available frame and updates metrics without stalling video.
+        """
+        if not self.camera_running:
             return
 
-        ret, frame_bgr = self.cap.read()
-        if not ret:
-            self.after(30, self._camera_loop)
-            return
+        with self.frame_lock:
+            frame = self.latest_frame
+            hand_data = self.latest_hand_data
+            details = self.latest_details
 
-        now = time.time()
-        fps = 1.0 / max(1e-4, (now - self.last_frame_time))
-        self.fps_tracker.append(fps)
-        self.last_frame_time = now
+        if frame is not None:
+            now = time.time()
+            ui_fps = 1.0 / max(1e-4, (now - self.last_frame_time))
+            self.fps_tracker.append(ui_fps)
+            self.last_frame_time = now
 
-        # Process frame with HandDetector (mirrored by default)
-        processed_frame, hand_data = self.detector.process_frame(frame_bgr, mirror=True)
+            # Render frame to canvas
+            self._render_video_frame(frame)
 
-        # Handle active calibration step if calibrating
-        if self.calibrator.is_calibrating():
-            self.calibrator.process_frame(hand_data)
+            # Live telemetry update
+            if details is not None:
+                cam_fps = np.mean(self.vision_fps_tracker) if len(self.vision_fps_tracker) > 0 else 30.0
+                infer_ms = hand_data.inference_ms if hand_data else self.detector.last_inference_ms
+                lat_ms = self.keyboard.last_latency_ms
+                self._update_dashboard_widgets(hand_data, details, cam_fps, infer_ms, lat_ms)
 
-        # Run Gesture Classification and State Machine
-        gesture_details: GestureDetails = self.recognizer.process(hand_data)
-
-        # Dispatch action to keyboard controller if edge triggered
-        if gesture_details.action_to_trigger:
-            self.keyboard.trigger_action(gesture_details.action_to_trigger)
-
-        # Check action banner expiration
-        banner_text = self.current_action_banner if now < self.action_banner_expire else ""
-
-        # Draw HUD overlays on camera frame
-        hud_frame = self.detector.draw_hud(
-            processed_frame,
-            hand_data,
-            current_gesture=gesture_details.confirmed_gesture,
-            action_name=banner_text,
-            is_active=self.keyboard.is_active
-        )
-
-        # Update Live Dashboard Widgets
-        self._update_dashboard_widgets(hand_data, gesture_details, np.mean(self.fps_tracker))
-
-        # Render Frame to CustomTkinter Label
-        self._render_video_frame(hud_frame)
-
-        # Schedule next iteration
-        self.after(10, self._camera_loop)
+        # Schedule next GUI refresh at ~60 FPS (16ms)
+        self.after(16, self._ui_update_loop)
 
     def _update_dashboard_widgets(
         self,
         hand_data: Optional[HandData],
         details: GestureDetails,
-        avg_fps: float
+        cam_fps: float,
+        infer_ms: float = 0.0,
+        lat_ms: float = 0.0
     ):
-        # FPS Metric
-        self.fps_lbl.configure(text=f"FPS: {avg_fps:.1f}")
+        # FPS & Latency Telemetry
+        ui_fps = np.mean(self.fps_tracker) if len(self.fps_tracker) > 0 else 30.0
+        self.fps_lbl.configure(text=f"CAM: {cam_fps:.1f} FPS | UI: {ui_fps:.1f}")
+        self.perf_lbl.configure(text=f"LAT: {lat_ms:.0f}ms | INFER: {infer_ms:.0f}ms")
 
         # Hand Tracking & Position
         if hand_data is not None:

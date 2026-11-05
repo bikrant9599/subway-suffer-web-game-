@@ -43,6 +43,9 @@ THEME = {
 
 @dataclass
 class ControllerSettings:
+    # Performance Mode ("NORMAL", "FAST", "ULTRA FAST")
+    performance_mode: str = "ULTRA FAST"
+
     # Camera settings
     camera_index: int = 0
     frame_width: int = 640
@@ -55,17 +58,17 @@ class ControllerSettings:
     min_tracking_confidence: float = 0.65
 
     # Gesture Cooldowns (in seconds)
-    cooldown_left_right: float = 0.28   # 280 ms (fast lane changes)
-    cooldown_jump: float = 0.40         # 400 ms (prevent double jumping)
-    cooldown_roll: float = 0.40         # 400 ms (prevent double rolling)
+    cooldown_left_right: float = 0.14   # 140 ms (Ultra-fast lane switching)
+    cooldown_jump: float = 0.25         # 250 ms (Ultra-fast jump reaction)
+    cooldown_roll: float = 0.25         # 250 ms (Ultra-fast roll reaction)
 
     # Debouncing / smoothing
-    smoothing_window: int = 4           # Frame buffer for temporal consensus
-    min_trigger_frames: int = 2         # Frames gesture must be held to register
+    smoothing_window: int = 2           # Frame buffer for consensus
+    min_trigger_frames: int = 1         # Frames gesture must be held to register
 
     # Input Mapping (ARROWS or WASD)
     key_preset: str = "ARROWS"          # "ARROWS" or "WASD"
-    key_press_duration: float = 0.04    # 40 ms key down time
+    key_press_duration: float = 0.025   # 25 ms snappy hardware pulse
 
     # Key mappings
     keys_arrows: dict = None
@@ -89,6 +92,32 @@ class ControllerSettings:
                 "MOVE_LEFT": "a",
                 "MOVE_RIGHT": "d"
             }
+
+    def apply_performance_mode(self, mode: str):
+        """Applies calibrated profiles for Normal, Fast, and Ultra Fast gameplay."""
+        mode_upper = mode.upper()
+        self.performance_mode = mode_upper
+        if mode_upper == "ULTRA FAST":
+            self.cooldown_left_right = 0.14
+            self.cooldown_jump = 0.25
+            self.cooldown_roll = 0.25
+            self.smoothing_window = 2
+            self.min_trigger_frames = 1
+            self.key_press_duration = 0.025
+        elif mode_upper == "FAST":
+            self.cooldown_left_right = 0.20
+            self.cooldown_jump = 0.32
+            self.cooldown_roll = 0.32
+            self.smoothing_window = 3
+            self.min_trigger_frames = 2
+            self.key_press_duration = 0.030
+        else: # NORMAL
+            self.cooldown_left_right = 0.28
+            self.cooldown_jump = 0.40
+            self.cooldown_roll = 0.40
+            self.smoothing_window = 4
+            self.min_trigger_frames = 2
+            self.key_press_duration = 0.040
 
     @property
     def current_keys(self) -> dict:

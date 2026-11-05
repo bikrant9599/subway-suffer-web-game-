@@ -17,3 +17,4 @@ echo Setup complete! Launch the controller with run.bat or:
 echo   .\venv\Scripts\python.exe main.py
 echo ========================================================
 pause
+

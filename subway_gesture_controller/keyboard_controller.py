@@ -108,6 +108,7 @@ class KeyboardController:
             "MOVE_RIGHT": 0,
             "TOTAL": 0
         }
+        self.last_latency_ms: float = 0.0
 
         # Listener callback for UI animation triggers
         self.on_action_triggered: Optional[Callable[[str, str], None]] = None
@@ -144,15 +145,20 @@ class KeyboardController:
         """Returns the active key mapping dictionary."""
         return self.mappings.get(self.key_preset, self.mappings["ARROWS"])
 
+    def set_key_hold_time(self, hold_time: float):
+        """Sets minimum keypress duration (e.g. 0.025s for Ultra Fast)."""
+        self.key_hold_time = max(0.015, hold_time)
+
     def trigger_action(self, action: str):
-        """Queues an action to be dispatched via keyboard."""
+        """Queues an action to be dispatched via keyboard with timing watermark."""
         if not self.is_active:
             return
 
         mapping = self.get_current_mapping()
         if action in mapping:
             key = mapping[action]
-            self._action_queue.put((action, key))
+            enqueue_time = time.perf_counter()
+            self._action_queue.put((action, key, enqueue_time))
 
     def _play_sound(self, action: str):
         """Plays subtle sound effect asynchronously."""
@@ -170,12 +176,15 @@ class KeyboardController:
         """Worker thread executing keyboard commands without blocking main thread."""
         while self._running:
             try:
-                action, key = self._action_queue.get(timeout=0.1)
+                action, key, enqueue_time = self._action_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
 
             if not self.is_active:
                 continue
+
+            # Measure dispatch latency
+            self.last_latency_ms = (time.perf_counter() - enqueue_time) * 1000
 
             # Update stats
             self.stats[action] = self.stats.get(action, 0) + 1

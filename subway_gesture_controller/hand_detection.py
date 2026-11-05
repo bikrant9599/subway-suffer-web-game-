@@ -44,6 +44,7 @@ class HandData:
     palm_size: float                  # Palm normalization scale (wrist to middle MCP)
     bbox: Tuple[int, int, int, int]   # (x_min, y_min, x_max, y_max) in pixels
     timestamp_ms: int = 0
+    inference_ms: float = 0.0         # Inference processing latency in milliseconds
 
 
 class HandDetector:
@@ -72,6 +73,7 @@ class HandDetector:
         self.prev_landmarks: Optional[np.ndarray] = None
         self.last_timestamp_ms: int = 0
         self.frame_count: int = 0
+        self.last_inference_ms: float = 0.0
 
     def _resolve_model(self, custom_path: Optional[str]) -> str:
         """Finds model file or downloads it automatically if missing."""
@@ -138,13 +140,16 @@ class HandDetector:
         rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-        # Run inference
+        # Run inference with precise latency measurement
+        t_start = time.perf_counter()
         try:
             detection_result = self.detector.detect(mp_image)
+            self.last_inference_ms = (time.perf_counter() - t_start) * 1000
         except Exception as e:
             # Fallback re-init if an unexpected engine error occurs
             print(f"[HandDetector] Warning: detection error: {e}")
             self.prev_landmarks = None
+            self.last_inference_ms = (time.perf_counter() - t_start) * 1000
             return frame_bgr, None
 
         if not detection_result.hand_landmarks:
@@ -207,7 +212,8 @@ class HandDetector:
             palm_center=palm_center,
             palm_size=palm_size,
             bbox=bbox,
-            timestamp_ms=int(time.time() * 1000)
+            timestamp_ms=int(time.time() * 1000),
+            inference_ms=self.last_inference_ms
         )
 
         return frame_bgr, hand_data

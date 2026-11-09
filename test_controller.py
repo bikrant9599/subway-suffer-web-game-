@@ -304,6 +304,38 @@ class TestSubwayGestureController(unittest.TestCase):
         time.sleep(0.12)
         self.assertEqual(self.keyboard.stats["JUMP"], 1, "Keystroke must dispatch successfully!")
 
+    # ========================================================
+    # TEST 10: Instantaneous 4-gesture sequence transition
+    # ========================================================
+    def test_10_instant_gesture_sequence_transitions(self):
+        """Tests that moving from Right -> Left -> Jump -> Roll triggers each action immediately."""
+        right_hand = self._create_synthetic_hand(
+            thumb_ext=False, index_ext=True, middle_ext=False, ring_ext=False, pinky_ext=False,
+            index_direction="right"
+        )
+        left_hand = self._create_synthetic_hand(
+            thumb_ext=False, index_ext=True, middle_ext=False, ring_ext=False, pinky_ext=False,
+            index_direction="left"
+        )
+        jump_hand = self._create_synthetic_hand(
+            thumb_ext=True, index_ext=True, middle_ext=True, ring_ext=True, pinky_ext=True
+        )
+        roll_hand = self._create_synthetic_hand(
+            thumb_ext=False, index_ext=False, middle_ext=False, ring_ext=False, pinky_ext=False
+        )
+
+        d1 = self.recognizer.process(right_hand)
+        self.assertEqual(d1.action_to_trigger, GestureType.MOVE_RIGHT)
+
+        d2 = self.recognizer.process(left_hand)
+        self.assertEqual(d2.action_to_trigger, GestureType.MOVE_LEFT)
+
+        d3 = self.recognizer.process(jump_hand)
+        self.assertEqual(d3.action_to_trigger, GestureType.JUMP)
+
+        d4 = self.recognizer.process(roll_hand)
+        self.assertEqual(d4.action_to_trigger, GestureType.ROLL)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "app": {
+      "root": ".",
+      "runtime": "python",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "subway_gesture_controller",
+          "format": "url",
+          "env": "SUBWAY_GESTURE_CONTROLLER_URL"
+        }
+      ]
+    },
+    "subway_gesture_controller": {
+      "root": "subway_gesture_controller",
+      "runtime": "python"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    }
+  ]
+}
+

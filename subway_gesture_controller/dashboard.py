@@ -776,6 +776,10 @@ class ControllerDashboard(ctk.CTk):
             self.cap = cv2.VideoCapture(1)
 
         if self.cap.isOpened():
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.frame_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.frame_height)
             self.camera_running = True
@@ -978,7 +982,7 @@ class ControllerDashboard(ctk.CTk):
         while self.camera_running and self.cap is not None:
             ret, frame_bgr = self.cap.read()
             if not ret or frame_bgr is None:
-                time.sleep(0.005)
+                time.sleep(0.001)
                 continue
 
             now = time.time()

@@ -183,9 +183,9 @@ To calibrate the controller for your specific hand dimensions and room lighting:
 
 ---
 
-## 🧪 Automated Testing (Tests 1–9)
+## 🧪 Automated Testing (Tests 1–10)
 
-All 9 features have dedicated automated tests in [test_controller.py](file:///d:/subway%20suffer/test_controller.py):
+All 10 features have dedicated automated tests in [test_controller.py](file:///d:/subway%20suffer/test_controller.py):
 ```powershell
 .\venv\Scripts\python.exe test_controller.py
 ```
@@ -200,6 +200,7 @@ All 9 features have dedicated automated tests in [test_controller.py](file:///d:
 - ✅ **Test 7:** Pause halts all keyboard commands.
 - ✅ **Test 8:** ESC / Emergency stop halts controller and releases all keys.
 - ✅ **Test 9:** Browser receives actual OS keyboard inputs via DirectInput & PyAutoGUI.
+- ✅ **Test 10:** Instantaneous 4-gesture sequence transitions (Right -> Left -> Jump -> Roll).
 
 ---
 

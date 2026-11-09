@@ -166,7 +166,7 @@ class GestureRecognizer:
         lm = hand_data.landmarks
         palm_size = hand_data.palm_size
 
-        # Analyze individual finger states
+        # Count extended fingers
         thumb_ext = self._is_thumb_extended(lm, palm_size)
         idx_ext, idx_angle = self._is_finger_extended(lm, 5, 6, 7, 8, palm_size)
         mid_ext, _ = self._is_finger_extended(lm, 9, 10, 11, 12, palm_size)
@@ -201,42 +201,43 @@ class GestureRecognizer:
         # 2D cross product: (v_palm.x * v_idx.y - v_palm.y * v_idx.x)
         cross_z = float(v_palm[0] * v_idx[1] - v_palm[1] * v_idx[0])
 
-        other_curled = (not mid_ext) and (not rng_ext) and (not pnk_ext)
+        extended_count = sum([thumb_ext, idx_ext, mid_ext, rng_ext, pnk_ext])
+        long_extended_count = sum([idx_ext, mid_ext, rng_ext, pnk_ext])
 
         # 1. OPEN PALM (JUMP)
-        # All 5 fingers extended (or all 4 long fingers extended and thumb open)
-        if idx_ext and mid_ext and rng_ext and pnk_ext:
-            if thumb_ext or (np.linalg.norm(lm[4, :2] - lm[5, :2]) > 0.35 * palm_size):
-                return GestureType.JUMP, finger_states, screen_angle
+        # All 4 long fingers extended, or all 5 extended, or >=4 extended with index & middle open
+        if (long_extended_count >= 4) or (extended_count >= 4 and idx_ext and mid_ext):
+            return GestureType.JUMP, finger_states, screen_angle
+        elif idx_ext and mid_ext and rng_ext and (thumb_ext or np.linalg.norm(lm[4, :2] - lm[5, :2]) > 0.35 * palm_size):
+            return GestureType.JUMP, finger_states, screen_angle
 
         # 2. CLOSED FIST (ROLL)
-        # All fingers folded / curled
-        if not idx_ext and not mid_ext and not rng_ext and not pnk_ext:
-            if not thumb_ext or (np.linalg.norm(lm[4, :2] - lm[5, :2]) < 0.45 * palm_size):
-                return GestureType.ROLL, finger_states, screen_angle
+        # All long fingers folded into fist (thumb can rest on top or tuck in)
+        if long_extended_count == 0 or (not idx_ext and not mid_ext and not rng_ext and not pnk_ext):
+            return GestureType.ROLL, finger_states, screen_angle
 
         # 3. INDEX POINTING / BENDING RIGHT (MOVE RIGHT)
-        # Index extended, middle, ring, pinky curled
-        if idx_ext and other_curled:
+        # Index extended, middle & ring curled (pinky relaxed or curled)
+        if idx_ext and (not mid_ext) and (not rng_ext):
             right_min = self.calibration["index_right_angle_min"]
             right_max = self.calibration["index_right_angle_max"]
             point_ratio = self.calibration["index_point_ratio"]
 
             is_angle_right = (right_min <= screen_angle <= right_max) and (dx > 0)
             is_dx_right = (dx > point_ratio * palm_size) and (idx_tip[0] > idx_pip[0])
-            is_bend_right = (cross_z < -0.03) and (dx > 0)
+            is_bend_right = (cross_z < -0.02) and (dx > 0)
 
             if is_angle_right or is_dx_right or is_bend_right:
                 return GestureType.MOVE_RIGHT, finger_states, screen_angle
 
         # 4. INDEX POINTING / BENDING LEFT (MOVE LEFT)
-        if idx_ext and other_curled:
+        if idx_ext and (not mid_ext) and (not rng_ext):
             left_thresh = self.calibration["index_left_angle_threshold"]
             point_ratio = self.calibration["index_point_ratio"]
 
             is_angle_left = (abs(screen_angle) >= left_thresh) and (dx < 0)
             is_dx_left = (-dx > point_ratio * palm_size) and (idx_tip[0] < idx_pip[0])
-            is_bend_left = (cross_z > 0.03) and (dx < 0)
+            is_bend_left = (cross_z > 0.02) and (dx < 0)
 
             if is_angle_left or is_dx_left or is_bend_left:
                 return GestureType.MOVE_LEFT, finger_states, screen_angle
@@ -278,26 +279,31 @@ class GestureRecognizer:
         raw_gesture, finger_states, index_angle = self._classify_raw_gesture(hand_data)
         self.gesture_history.append(raw_gesture)
 
-        # 2. Temporal consensus smoothing (filtering transient noise)
-        confirmed = self.confirmed_gesture
+        # 2. Temporal consensus smoothing (filtering transient noise with zero lag)
         active_gestures = [GestureType.JUMP, GestureType.ROLL, GestureType.MOVE_LEFT, GestureType.MOVE_RIGHT]
 
-        if len(self.gesture_history) >= 1:
-            counts: Dict[str, int] = {}
-            for g in self.gesture_history:
-                counts[g] = counts.get(g, 0) + 1
-
-            for g, cnt in counts.items():
-                if g in active_gestures and cnt >= self.min_trigger_consensus:
-                    confirmed = g
-                    break
+        if self.min_trigger_consensus <= 1:
+            # Immediate 1-frame trigger in Ultra-Fast mode
+            confirmed = raw_gesture
+        else:
+            # Check if newest raw gesture already satisfies consensus
+            raw_cnt = self.gesture_history.count(raw_gesture)
+            if raw_gesture in active_gestures and raw_cnt >= self.min_trigger_consensus:
+                confirmed = raw_gesture
             else:
-                if counts.get(GestureType.NEUTRAL, 0) >= (self.smoothing_frames // 2):
-                    confirmed = GestureType.NEUTRAL
-                elif counts.get(GestureType.NONE, 0) >= (self.smoothing_frames // 2):
-                    confirmed = GestureType.NONE
+                # Prioritize most recent active gestures (reverse history order)
+                confirmed = self.confirmed_gesture
+                for g in reversed(self.gesture_history):
+                    if g in active_gestures and self.gesture_history.count(g) >= self.min_trigger_consensus:
+                        confirmed = g
+                        break
                 else:
-                    confirmed = raw_gesture
+                    if self.gesture_history.count(GestureType.NEUTRAL) >= (self.smoothing_frames // 2):
+                        confirmed = GestureType.NEUTRAL
+                    elif self.gesture_history.count(GestureType.NONE) >= (self.smoothing_frames // 2):
+                        confirmed = GestureType.NONE
+                    else:
+                        confirmed = raw_gesture
 
         self.confirmed_gesture = confirmed
 
@@ -313,13 +319,15 @@ class GestureRecognizer:
                     action_to_trigger = confirmed
                     self.last_trigger_time[confirmed] = now
                     # Update cooldown remaining
-                    cooldown_rem[confirmed] = self.cooldowns.get(confirmed, 0.3)
-                self.currently_held_gesture = confirmed
+                    cooldown_rem[confirmed] = self.cooldowns.get(confirmed, 0.15)
+                    self.currently_held_gesture = confirmed
+                # Critical: If cooldown has not expired yet, do NOT set currently_held_gesture = confirmed!
+                # Leaving it allows the gesture to fire immediately once the cooldown clears.
             else:
-                # Still holding the same gesture -> DO NOT TRIGGER AGAIN!
+                # Still holding the same gesture that already fired -> DO NOT TRIGGER AGAIN!
                 action_to_trigger = None
         else:
-            # User relaxed hand / returned to neutral position
+            # User relaxed hand / returned to neutral position -> instantly clear held gesture
             self.currently_held_gesture = GestureType.NONE
             action_to_trigger = None
 

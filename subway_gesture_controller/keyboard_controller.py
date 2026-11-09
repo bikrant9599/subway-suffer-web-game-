@@ -113,6 +113,11 @@ class KeyboardController:
         # Listener callback for UI animation triggers
         self.on_action_triggered: Optional[Callable[[str, str], None]] = None
 
+        # Dedicated sound worker queue and thread to eliminate per-keypress thread spawning latency
+        self._sound_queue: queue.Queue = queue.Queue(maxsize=10)
+        self._sound_thread = threading.Thread(target=self._sound_worker, daemon=True)
+        self._sound_thread.start()
+
         # Start asynchronous worker thread
         self._worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self._worker_thread.start()
@@ -160,6 +165,19 @@ class KeyboardController:
             enqueue_time = time.perf_counter()
             self._action_queue.put((action, key, enqueue_time))
 
+    def _sound_worker(self):
+        """Dedicated background thread handling audio beeps with zero main thread overhead."""
+        while self._running:
+            try:
+                action = self._sound_queue.get(timeout=0.1)
+                if action is None:
+                    break
+                self._play_sound(action)
+            except queue.Empty:
+                continue
+            except Exception:
+                pass
+
     def _play_sound(self, action: str):
         """Plays subtle sound effect asynchronously."""
         if not self.enable_sound or not HAS_WINSOUND:
@@ -176,33 +194,34 @@ class KeyboardController:
         """Worker thread executing keyboard commands without blocking main thread."""
         while self._running:
             try:
-                action, key, enqueue_time = self._action_queue.get(timeout=0.05)
+                action, key, enqueue_time = self._action_queue.get(timeout=0.01)
             except queue.Empty:
                 continue
 
             if not self.is_active:
                 continue
 
-            # Measure dispatch latency
+            # 1. SEND KEYSTROKE FIRST: Instantaneous OS hardware-level dispatch!
+            self._send_keypress(key)
             self.last_latency_ms = (time.perf_counter() - enqueue_time) * 1000
 
-            # Update stats
+            # 2. Update stats
             self.stats[action] = self.stats.get(action, 0) + 1
             self.stats["TOTAL"] += 1
 
-            # Dispatch UI callback
+            # 3. Audio feedback via non-blocking sound queue
+            if self.enable_sound and self._sound_queue is not None:
+                try:
+                    self._sound_queue.put_nowait(action)
+                except Exception:
+                    pass
+
+            # 4. Dispatch UI callback asynchronously
             if self.on_action_triggered:
                 try:
                     self.on_action_triggered(action, key)
                 except Exception as e:
                     print(f"[KeyboardController] UI Callback error: {e}")
-
-            # Audio feedback in background
-            if self.enable_sound:
-                threading.Thread(target=self._play_sound, args=(action,), daemon=True).start()
-
-            # Execute keystroke
-            self._send_keypress(key)
 
     def _send_keypress(self, key: str):
         """
@@ -229,8 +248,13 @@ class KeyboardController:
             self.stats[k] = 0
 
     def shutdown(self):
-        """Stops the worker thread and releases all keys."""
+        """Stops the worker threads and releases all keys."""
         self._running = False
         self.is_active = False
+        if hasattr(self, "_sound_queue") and self._sound_queue is not None:
+            try:
+                self._sound_queue.put_nowait(None)
+            except Exception:
+                pass
         self.release_all_keys()
 
